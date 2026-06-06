@@ -10,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { motion } from 'framer-motion';
 import RefreshButton from '../components/ui/RefreshButton';
 import PhoneInput, { detectCountry, isValidForCountry } from '../components/ui/PhoneInput';
-import SharedZoneBadge from '../components/ui/SharedZoneBadge';
 import ReassignDialog from '../components/ui/ReassignDialog';
 import useManagersMap from '../hooks/useManagersMap';
 import HealthChip from '../components/health/HealthChip';
@@ -166,9 +165,6 @@ const Customers = () => {
           <div className="flex-1 min-w-0">
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#18181B] leading-tight break-words" style={{ fontFamily: 'Mazzard, Mazzard H, Mazzard M, system-ui, sans-serif' }}>{t('customersTitle')}</h1>
             <p className="text-xs sm:text-sm text-[#71717A] mt-1 break-words">{t('customerDatabase')}</p>
-            <div className="mt-2">
-              <SharedZoneBadge />
-            </div>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">

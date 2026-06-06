@@ -1,45 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
-import { useLang, STAFF_LANGUAGES } from '../i18n';
-import NotificationBell from './NotificationBell';
+import { useLang } from '../i18n';
 import {
   ChartPieSlice,
-  UsersThree,
   UserCircle,
   MagnifyingGlass,
   Database,
   SignOut,
   CaretDown,
   CaretUp,
-  UserPlus,
   Percent,
   Sliders,
   Wrench,
   List,
   X,
-  Globe,
   Phone,
   Bell,
   LockKey,
   FileText,
-  ShieldCheck,
 } from '@phosphor-icons/react';
 
 const Layout = () => {
   const { user, logout } = useAuth();
-  const { t, lang, changeLang } = useLang();
+  const { t } = useLang();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
-  const langDropdownRef = useRef(null);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const [expandedSections, setExpandedSections] = useState({
-    crm: false,
     settings: false,
   });
 
@@ -51,30 +43,20 @@ const Layout = () => {
     const handleEscape = (e) => {
       if (e.key === 'Escape') {
         setIsMobileMenuOpen(false);
-        setIsLangDropdownOpen(false);
       }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, []);
 
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (langDropdownRef.current && !langDropdownRef.current.contains(e.target)) {
-        setIsLangDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
   const searchItems = [
-    { path: '/admin', label: t('dashboard') || 'Dashboard', keywords: ['dashboard', 'панель'] },
-    { path: '/admin/leads', label: t('leads') || 'Leads', keywords: ['leads', 'лиды'] },
-    { path: '/admin/customers', label: t('customers') || 'Customers', keywords: ['customers', 'клиенты'] },
-    { path: '/admin/calculator', label: t('calculatorAdmin') || 'Calculator', keywords: ['calculator', 'калькулятор'] },
+    { path: '/admin', label: 'Панель', keywords: ['dashboard', 'панель'] },
+    { path: '/admin/customers', label: 'Клиенты', keywords: ['customers', 'клиенты'] },
+    { path: '/admin/calculator', label: 'Калькулятор', keywords: ['calculator', 'калькулятор'] },
     { path: '/admin/parser', label: 'VIN Parser', keywords: ['parser', 'vin'] },
-    { path: '/admin/settings', label: 'System', keywords: ['settings', 'настройки'] },
+    { path: '/admin/notifications', label: 'Уведомления', keywords: ['notifications', 'уведомления'] },
+    { path: '/admin/ringostat', label: 'Ringostat', keywords: ['ringostat', 'звонки'] },
+    { path: '/admin/settings', label: 'Система', keywords: ['settings', 'настройки'] },
   ];
 
   const filteredSearchItems = searchQuery.trim()
@@ -107,35 +89,21 @@ const Layout = () => {
   const isSectionActive = (items) =>
     Array.isArray(items) && items.some((it) => isItemActive(it.path));
 
-  // ── Сильно урезанное меню — только то, что осталось после чистки.
-  //    Удалено: tasks, insights (analytics), login-audit, security-2fa-page
-  //    (2FA настройка живёт в /admin/settings).
-  //    Ранее удалено: deals, deposits, legal, finance, delivery, operations,
-  //    forecast, contracts, executive, actions, notifications-center,
-  //    customer-portal, staff, team/*, manager/*, tracking, vesselfinder,
-  //    payments (Stripe), services, owner-dashboard, invoice-reminders,
-  //    routing-rules, cadences, score-rules, predictive-leads, kpi,
-  //    call-board, staff-sessions, journey, risk, escalations, control hub.
   const navGroups = [
     {
       id: 'dashboard',
       type: 'single',
-      item: { path: '/admin', icon: ChartPieSlice, label: t('dashboard') || 'Dashboard' },
+      item: { path: '/admin', icon: ChartPieSlice, label: 'Панель' },
     },
     {
-      id: 'crm',
-      type: 'group',
-      label: t('crm') || 'CRM',
-      icon: UsersThree,
-      items: [
-        { path: '/admin/leads', icon: UserPlus, label: t('leads') || 'Leads' },
-        { path: '/admin/customers', icon: UserCircle, label: t('customers') || 'Customers' },
-      ],
+      id: 'customers',
+      type: 'single',
+      item: { path: '/admin/customers', icon: UserCircle, label: 'Клиенты' },
     },
     {
       id: 'calculator',
       type: 'single',
-      item: { path: '/admin/calculator', icon: Percent, label: t('calculatorAdmin') || 'Calculator' },
+      item: { path: '/admin/calculator', icon: Percent, label: 'Калькулятор' },
     },
     {
       id: 'parser',
@@ -143,14 +111,9 @@ const Layout = () => {
       item: { path: '/admin/parser', icon: Database, label: 'VIN Parser' },
     },
     {
-      id: 'moderation',
-      type: 'single',
-      item: { path: '/admin/moderation', icon: ShieldCheck, label: 'Moderation' },
-    },
-    {
       id: 'notifications',
       type: 'single',
-      item: { path: '/admin/notifications', icon: Bell, label: 'Notifications' },
+      item: { path: '/admin/notifications', icon: Bell, label: 'Уведомления' },
     },
     {
       id: 'ringostat',
@@ -160,21 +123,19 @@ const Layout = () => {
     {
       id: 'settings',
       type: 'group',
-      label: t('settings') || 'Settings',
+      label: 'Настройки',
       icon: Sliders,
       items: [
-        { path: '/admin/settings', icon: Wrench, label: 'System' },
-        { path: '/admin/settings/notifications', icon: Bell, label: 'Notifications hub' },
-        { path: '/admin/system-settings', icon: Globe, label: 'Domain & CORS' },
+        { path: '/admin/settings', icon: Wrench, label: 'Система' },
         { path: '/admin/info', icon: FileText, label: 'Info' },
       ],
     },
   ];
 
   const roleLabels = {
-    master_admin: t('roleMasterAdmin') || 'Master Admin',
-    admin: t('roleAdmin') || 'Admin',
-    moderator: t('roleModerator') || 'Moderator',
+    master_admin: 'Мастер-админ',
+    admin: 'Админ',
+    moderator: 'Модератор',
   };
 
   return (
@@ -277,7 +238,7 @@ const Layout = () => {
             data-testid="change-password-link"
           >
             <LockKey size={18} weight="duotone" />
-            <span>Change password</span>
+            <span>Сменить пароль</span>
           </NavLink>
           <button
             onClick={handleLogout}
@@ -285,7 +246,7 @@ const Layout = () => {
             data-testid="logout-btn"
           >
             <SignOut size={18} weight="duotone" />
-            <span>{t('logout') || 'Logout'}</span>
+            <span>Выход</span>
           </button>
         </div>
       </aside>
@@ -303,7 +264,7 @@ const Layout = () => {
             <div className="hidden md:block w-80 relative">
               <input
                 type="text"
-                placeholder={t('search') || 'Search'}
+                placeholder="Поиск"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="input w-full"
@@ -333,47 +294,6 @@ const Layout = () => {
             >
               <MagnifyingGlass size={20} weight="bold" />
             </button>
-
-            <div className="relative flex-shrink-0" ref={langDropdownRef}>
-              <button
-                onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
-                className="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 py-2 text-sm font-medium text-[#71717A] hover:text-[#18181B] hover:bg-[#F4F4F5] rounded-lg"
-                data-testid="lang-switcher-btn"
-              >
-                <Globe size={20} weight="duotone" />
-                <span className="hidden sm:inline">
-                  {STAFF_LANGUAGES.find((l) => l.code === lang)?.label || 'ENG'}
-                </span>
-                <CaretDown
-                  size={14}
-                  className={`transition-transform ${isLangDropdownOpen ? 'rotate-180' : ''}`}
-                />
-              </button>
-              {isLangDropdownOpen && (
-                <div className="absolute right-0 top-full mt-1 bg-white border border-[#E4E4E7] rounded-xl shadow-lg py-1 min-w-[140px] z-50">
-                  {STAFF_LANGUAGES.map((language) => (
-                    <button
-                      key={language.code}
-                      onClick={() => {
-                        changeLang(language.code);
-                        setIsLangDropdownOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm ${
-                        lang === language.code
-                          ? 'bg-[#F4F4F5] text-[#18181B] font-medium'
-                          : 'text-[#71717A] hover:bg-[#F4F4F5] hover:text-[#18181B]'
-                      }`}
-                      data-testid={`lang-${language.code}`}
-                    >
-                      <span className="text-base">{language.flag}</span>
-                      <span>{language.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <NotificationBell />
           </div>
         </header>
 
@@ -382,7 +302,7 @@ const Layout = () => {
             <div className="md:hidden mb-4 relative">
               <input
                 type="text"
-                placeholder={t('search') || 'Search'}
+                placeholder="Поиск"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus

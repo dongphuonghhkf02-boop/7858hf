@@ -150,14 +150,12 @@ async def admin_integrations():
         "stripe":       {"secretKey", "restrictedKey", "webhookSecret"},
         "email":        {"smtpPassword"},
         "resend":       {"apiKey", "resendKey"},
-        "openai":       {"apiKey"},
         "shipping":     {"apiKey", "vesselFinderKey", "shipsGoKey"},
         "sms":          {"apiKey", "textbeltKey"},
     }
     # Public-typed keys whose default we want exposed even when DB has no record
     PUBLIC_DEFAULTS = {
         "stripe":   {"settings": {"currency": "USD"}, "mode": "sandbox"},
-        "openai":   {"settings": {"model": "gpt-4o"}, "mode": "sandbox"},
         "email":    {"settings": {}, "mode": "disabled"},
         "resend":   {"settings": {}, "mode": "disabled"},
         "shipping": {"settings": {}, "mode": "disabled"},
@@ -200,7 +198,6 @@ async def admin_integrations():
     email_cfg = await _load("email")
     resend_cfg = await _load("resend")
     shipping_cfg = await _load("shipping")
-    openai_cfg = await _load("openai")
     sms_cfg = await _load("sms")
 
     ringostat_block = {
@@ -211,7 +208,7 @@ async def admin_integrations():
         "isEnabled": ringostat_enabled,
     }
 
-    return [google, stripe_cfg, ringostat_block, email_cfg, resend_cfg, shipping_cfg, openai_cfg, sms_cfg]
+    return [google, stripe_cfg, ringostat_block, email_cfg, resend_cfg, shipping_cfg, sms_cfg]
 
 
 @router.get("/health")
@@ -259,10 +256,10 @@ async def integrations_health():
         import os as _os
         resend_status = "ok" if _os.environ.get("RESEND_API_KEY") else "not_configured"
 
-    openai_doc = await _doc("openai")
-    openai_creds = openai_doc.get("credentials") or {}
-    openai_has = bool(openai_creds.get("apiKey"))
-    openai_enabled = bool(openai_doc.get("isEnabled", openai_has))
+    openai_doc = {}
+    openai_creds = {}
+    openai_has = False
+    openai_enabled = False
 
     shipping_doc = await _doc("shipping")
     shipping_creds = shipping_doc.get("credentials") or {}
@@ -305,11 +302,6 @@ async def integrations_health():
             "status": "ok" if (shipping_db_has or shipping_env_has) else "not_configured",
             "isEnabled": bool(shipping_db_has or shipping_env_has),
             "lastCheck": now,
-        },
-        "openai": {
-            "status": "ok" if (openai_has and openai_enabled) else ("degraded" if openai_has else "not_configured"),
-            "isEnabled": openai_enabled,
-            "lastCheck": now if openai_has else None,
         },
         "sms": await _sms_health_block(db, now),
     }
@@ -362,7 +354,7 @@ async def update_integration(integration_id: str, data: Dict[str, Any] = Body(..
 async def patch_integration(provider: str, data: Dict[str, Any] = Body(...)):
     """Persist integration config (credentials, settings, mode)."""
     db = _db()
-    allowed = {"google_oauth", "stripe", "email", "resend", "shipping", "openai", "sms"}
+    allowed = {"google_oauth", "stripe", "email", "resend", "shipping", "sms"}
     if provider not in allowed:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
@@ -517,22 +509,6 @@ async def test_integration(provider: str, data: Optional[Dict[str, Any]] = Body(
                 success, message = False, "Client ID format looks wrong — it should end with '.apps.googleusercontent.com'."
             else:
                 success, message = True, f"Client ID format OK ({client_id[:18]}…). Final verification happens at sign-in time."
-
-        elif provider == "openai":
-            api_key = (creds.get("apiKey") or "").strip()
-            if not api_key:
-                success, message = False, "API Key is empty — fill it in and Save first."
-            else:
-                try:
-                    from openai import OpenAI as _OpenAI
-                    client = _OpenAI(api_key=api_key)
-                    res = await asyncio.to_thread(lambda: client.models.list())
-                    n = len(getattr(res, "data", []) or [])
-                    success = True
-                    message = f"OpenAI key valid — {n} models accessible."
-                except Exception as ex:
-                    success = False
-                    message = f"OpenAI error: {type(ex).__name__}: {str(ex)[:200]}"
 
         elif provider == "email":
             host = (creds.get("smtpHost") or "").strip()

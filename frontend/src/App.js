@@ -12,6 +12,10 @@
  *           Routing/Cadences/ScoreRules, Predictive Leads, KPI, CallBoard,
  *           StaffSessions, Risk, Journey, Escalations, Control hub,
  *           Team/* и Manager/* воркспейсы (роли менеджер/тимлид)
+ *
+ * Wave 2026-06: удалены все СРМ-представления менеджеров и лидов
+ * (Leads, Lead360, Dashboard widgets) и админский блок нотификаций
+ * (NotificationsPage/Settings/Hub).
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
@@ -51,7 +55,6 @@ import CookieConsentBanner from './components/public/CookieConsentBanner';
 
 // Admin pages (kept)
 import Dashboard from './pages/Dashboard';
-import Leads from './pages/Leads';
 import Customers from './pages/Customers';
 import Settings from './pages/Settings'; // noqa — referenced from System hub legacy
 import ProxySettings from './pages/ProxySettings';
@@ -62,19 +65,14 @@ import ParserSettings from './pages/ParserSettings';
 import ParserTestLab from './pages/ParserTestLab';
 import CalculatorAdmin from './pages/CalculatorAdmin';
 import Customer360 from './pages/Customer360';
-import Lead360 from './pages/Lead360';
-import ModerationPage from './pages/ModerationPage';
 import SourceHealthDashboard from './pages/admin/SourceHealthDashboard';
 import VinEngineDashboard from './pages/admin/VinEngineDashboard';
 import HistoryReportsAdmin from './pages/admin/HistoryReportsAdmin';
-import NotificationSettings from './pages/admin/NotificationSettings';
 import CarfaxAdminPage from './pages/admin/CarfaxAdminPage';
 import SystemPage from './pages/admin/SystemPage';
 import AdminInfoPage from './pages/admin/AdminInfoPage';
-import NotificationsHubPage from './pages/admin/NotificationsHubPage';
 import RingostatAdminPage from './pages/admin/RingostatAdminPage';
-import AdminSystemSettingsPage from './pages/admin/AdminSystemSettingsPage';
-import NotificationsPage from './pages/NotificationsPage';
+import NotificationsHubPage from './pages/admin/NotificationsHubPage';
 
 // Cabinet — оставляем только фавориты, сравнение, расшаренное, профиль, уведомления, dashboard
 import {
@@ -197,7 +195,7 @@ const ProtectedRoute = ({ children }) => {
       <div className="h-screen flex items-center justify-center bg-[#F7F7F8]">
         <div className="text-center">
           <div className="animate-spin w-8 h-8 border-2 border-[#0A0A0B] border-t-transparent rounded-full mx-auto mb-4"></div>
-          <p className="text-sm text-[#71717A]">Loading...</p>
+          <p className="text-sm text-[#71717A]">Загрузка...</p>
         </div>
       </div>
     );
@@ -315,8 +313,9 @@ function App() {
                         }
                       >
                         <Route index element={<Dashboard />} />
-                        <Route path="leads" element={<Leads />} />
-                        <Route path="leads/:id" element={<Lead360 />} />
+                        {/* Leads / Lead360 — удалены (в системе нет менеджеров/лидов) */}
+                        <Route path="leads" element={<Navigate to="/admin" replace />} />
+                        <Route path="leads/:id" element={<Navigate to="/admin" replace />} />
                         <Route path="customers" element={<Customers />} />
                         <Route path="customers/:id/360" element={<Customer360 />} />
 
@@ -336,14 +335,16 @@ function App() {
                         <Route path="source-health" element={<SourceHealthDashboard />} />
                         <Route path="vin-engine" element={<VinEngineDashboard />} />
 
-                        {/* Moderation */}
-                        <Route path="moderation" element={<ModerationPage />} />
-                        <Route path="listings/moderation" element={<ModerationPage />} />
+                        {/* Moderation — удалена из навигации (была bid.cars/auction moderation,
+                            не та логика, что нужна продукту). Маршруты редиректят на дашборд. */}
+                        <Route path="moderation" element={<Navigate to="/admin" replace />} />
+                        <Route path="listings/moderation" element={<Navigate to="/admin" replace />} />
 
-                        {/* Notifications */}
-                        <Route path="notifications" element={<NotificationsPage />} />
-                        <Route path="notification-settings" element={<NotificationSettings />} />
-                        <Route path="settings/notifications" element={<NotificationsHubPage />} />
+                        {/* Notifications — единственный admin-хаб (отправка уведомлений клиентам).
+                            Старые страницы NotificationSettings / NotificationRules выпилены. */}
+                        <Route path="notifications" element={<NotificationsHubPage />} />
+                        <Route path="notification-settings" element={<Navigate to="/admin/notifications" replace />} />
+                        <Route path="settings/notifications" element={<Navigate to="/admin/notifications" replace />} />
 
                         {/* Password (2FA setup lives inside /admin/settings) */}
                         <Route path="profile/password" element={<ChangePasswordPage />} />
@@ -357,8 +358,8 @@ function App() {
                         <Route path="settings" element={<SystemPage />} />
                         <Route path="settings/auth" element={<Navigate to="/admin/settings?tab=auth" replace />} />
                         <Route path="info" element={<AdminInfoPage />} />
-                        <Route path="system-settings" element={<AdminSystemSettingsPage />} />
-                        <Route path="workers" element={<Navigate to="/admin/settings?tab=workers" replace />} />
+                        <Route path="system-settings" element={<Navigate to="/admin/settings" replace />} />
+                        <Route path="workers" element={<Navigate to="/admin/settings" replace />} />
 
                         {/* Catch-all */}
                         <Route path="*" element={<Navigate to="/admin" replace />} />

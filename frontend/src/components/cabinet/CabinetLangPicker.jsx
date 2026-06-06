@@ -30,12 +30,11 @@ const CabinetLangPicker = ({ className = '' }) => {
   const ddRef = useRef(null);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
 
-  // Customer cabinet supports EN + RU. Fall back to the static label
-  // map if the context didn't expose CUSTOMER_LANGUAGES (super defensive).
+  // Customer cabinet — RU only (English removed product-wide).
   const languages = useMemo(() => {
-    const arr = Array.isArray(CUSTOMER_LANGUAGES) ? CUSTOMER_LANGUAGES : [];
+    const arr = Array.isArray(CUSTOMER_LANGUAGES) ? CUSTOMER_LANGUAGES.filter((x) => x.code === 'ru') : [];
     if (arr.length) return arr;
-    return [DEFAULT_FALLBACK, { code: 'ru', label: 'RU', name: 'Русский' }];
+    return [{ code: 'ru', label: 'RU', name: 'Русский' }];
   }, []);
 
   const activeLabel = useMemo(() => {
@@ -70,6 +69,9 @@ const CabinetLangPicker = ({ className = '' }) => {
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  // If there is only one language available — hide the picker entirely.
+  if (languages.length <= 1) return null;
 
   return (
     <div ref={triggerRef} className={className} style={{ position: 'relative' }}>
