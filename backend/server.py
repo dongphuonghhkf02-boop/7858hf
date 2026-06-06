@@ -4468,10 +4468,15 @@ except Exception as _e:
 #  the same path \u2014 readers here, writers still in server.py for now.
 # ─────────────────────────────────────────────────────────────────────────
 try:
+    # Ringostat ЗАМОРОЖЕН (UI скрыт). Чтобы разморозить — RINGOSTAT_ENABLED=1
+    if os.environ.get("RINGOSTAT_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        raise RuntimeError("ringostat_frozen")
     from app.routers import admin_ringostat as _admin_ringostat_mod
     fastapi_app.include_router(_admin_ringostat_mod.router)
     logger.info("[admin_ringostat] router mounted: %d routes",
                 sum(1 for _ in _admin_ringostat_mod.router.routes))
+except RuntimeError as _e:
+    logger.info("[admin_ringostat] FROZEN — router NOT mounted (set RINGOSTAT_ENABLED=1 to thaw)")
 except Exception as _e:
     logger.exception("[admin_ringostat] failed to mount router: %s", _e)
 
@@ -4479,10 +4484,14 @@ except Exception as _e:
 # per-user UI preferences).  All endpoints in this router use FULL
 # explicit paths (``/api/...``) — no prefix here.
 try:
+    if os.environ.get("RINGOSTAT_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        raise RuntimeError("ringostat_frozen")
     from app.routers import ringostat_roles as _rg_roles_mod
     fastapi_app.include_router(_rg_roles_mod.router)
     logger.info("[ringostat_roles] router mounted: %d routes",
                 sum(1 for _ in _rg_roles_mod.router.routes))
+except RuntimeError as _e:
+    logger.info("[ringostat_roles] FROZEN — router NOT mounted (set RINGOSTAT_ENABLED=1 to thaw)")
 except Exception as _e:
     logger.exception("[ringostat_roles] failed to mount router: %s", _e)
 

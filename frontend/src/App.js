@@ -71,7 +71,7 @@ import HistoryReportsAdmin from './pages/admin/HistoryReportsAdmin';
 import CarfaxAdminPage from './pages/admin/CarfaxAdminPage';
 import SystemPage from './pages/admin/SystemPage';
 import AdminInfoPage from './pages/admin/AdminInfoPage';
-import RingostatAdminPage from './pages/admin/RingostatAdminPage';
+import RingostatAdminPage from './pages/admin/RingostatAdminPage'; // FROZEN — UI-скрыт, оставлен в коде
 import NotificationsHubPage from './pages/admin/NotificationsHubPage';
 
 // Cabinet — оставляем только фавориты, сравнение, расшаренное, профиль, уведомления, dashboard
@@ -349,10 +349,12 @@ function App() {
                         {/* Password (2FA setup lives inside /admin/settings) */}
                         <Route path="profile/password" element={<ChangePasswordPage />} />
 
-                        {/* History / Carfax / Ringostat */}
+                        {/* History / Carfax */}
                         <Route path="history-reports" element={<HistoryReportsAdmin />} />
                         <Route path="carfax" element={<CarfaxAdminPage />} />
-                        <Route path="ringostat" element={<RingostatAdminPage />} />
+                        {/* Ringostat — ЗАМОРОЖЕН: UI скрыт, маршрут редиректит на дашборд.
+                            Компонент и backend-логика оставлены в коде для будущей разморозки. */}
+                        <Route path="ringostat" element={<Navigate to="/admin" replace />} />
 
                         {/* System / Settings */}
                         <Route path="settings" element={<SystemPage />} />

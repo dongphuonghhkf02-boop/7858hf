@@ -15,7 +15,6 @@ import {
   Wrench,
   List,
   X,
-  Phone,
   Bell,
   LockKey,
   FileText,
@@ -55,7 +54,6 @@ const Layout = () => {
     { path: '/admin/calculator', label: 'Калькулятор', keywords: ['calculator', 'калькулятор'] },
     { path: '/admin/parser', label: 'VIN Parser', keywords: ['parser', 'vin'] },
     { path: '/admin/notifications', label: 'Уведомления', keywords: ['notifications', 'уведомления'] },
-    { path: '/admin/ringostat', label: 'Ringostat', keywords: ['ringostat', 'звонки'] },
     { path: '/admin/settings', label: 'Система', keywords: ['settings', 'настройки'] },
   ];
 
@@ -114,11 +112,6 @@ const Layout = () => {
       id: 'notifications',
       type: 'single',
       item: { path: '/admin/notifications', icon: Bell, label: 'Уведомления' },
-    },
-    {
-      id: 'ringostat',
-      type: 'single',
-      item: { path: '/admin/ringostat', icon: Phone, label: 'Ringostat' },
     },
     {
       id: 'settings',
