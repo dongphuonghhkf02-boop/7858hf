@@ -3491,6 +3491,12 @@ _LEGACY_PREFIXES = (
     "/api/carfast/",
 )
 
+# Ringostat FROZEN — paths blocked at middleware so any leftover @fastapi_app
+# decorators (webhook, callback, debug/simulate, admin/integrations/ringostat/*)
+# never execute. Set RINGOSTAT_ENABLED=1 to thaw.
+_RINGOSTAT_FROZEN = os.environ.get("RINGOSTAT_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on")
+_RINGOSTAT_PATH_TOKENS = ("/ringostat/", "/ringostat")
+
 
 @fastapi_app.middleware("http")
 async def _deprecate_legacy_endpoints(request: Request, call_next):
@@ -3512,6 +3518,17 @@ async def _deprecate_legacy_endpoints(request: Request, call_next):
                     "autoauctionhistory",
                     "salvagebid",
                 ],
+            },
+        )
+    # Ringostat freeze gate — uniformly block any leftover surface.
+    if _RINGOSTAT_FROZEN and any(tok in path for tok in _RINGOSTAT_PATH_TOKENS):
+        return JSONResponse(
+            status_code=410,
+            content={
+                "frozen": True,
+                "endpoint": path,
+                "feature": "ringostat",
+                "message": "Ringostat integration is frozen. Set RINGOSTAT_ENABLED=1 to thaw.",
             },
         )
     return await call_next(request)
