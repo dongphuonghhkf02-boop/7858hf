@@ -31,9 +31,13 @@ const TABS = [
   { id: 'security', label: 'Security · 2FA' },
 ];
 
-export default function AdminSettingsPage({ embedded = false }) {
+export default function AdminSettingsPage({ embedded = false, forceTab = null, hideTabs = false }) {
   const { t } = useLang();
-  const [tab, setTab] = useState('crm');
+  const [tab, setTab] = useState(forceTab || 'crm');
+  // Если родитель форсит конкретный таб — синхронизируемся с ним.
+  useEffect(() => {
+    if (forceTab) setTab(forceTab);
+  }, [forceTab]);
   return (
     <div className={embedded ? '' : 'p-6 max-w-6xl mx-auto'}>
       {!embedded && (
@@ -51,15 +55,17 @@ export default function AdminSettingsPage({ embedded = false }) {
       )}
 
       {/* Secondary tabs (CRM / Security) — same unified component */}
-      <div className="mb-5">
-        <SectionTabs
-          tabs={TABS}
-          activeId={tab}
-          onChange={setTab}
-          testIdPrefix="settings-tab"
-          ariaLabel="General sections"
-        />
-      </div>
+      {!hideTabs && (
+        <div className="mb-5">
+          <SectionTabs
+            tabs={TABS}
+            activeId={tab}
+            onChange={setTab}
+            testIdPrefix="settings-tab"
+            ariaLabel="General sections"
+          />
+        </div>
+      )}
 
       {/* Content */}
       {tab === 'crm' && <CRMSettings />}

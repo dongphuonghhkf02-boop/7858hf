@@ -1693,6 +1693,154 @@ async def send_test_email(data: Dict[str, Any] = Body(...)):
 # Считаем из email_outbox по статусу=sent. Возвращаем daily/monthly used+remaining,
 # чтобы admin сразу видел сколько ещё можно отправить без апгрейда плана.
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# Admin → клиенту: отправка персонального уведомления
+# ════════════════════════════════════════════════════════════════════════════
+# Простой endpoint без шаблонов/правил — admin выбирает клиента, канал,
+# вводит заголовок+текст и нажимает «Отправить». Поддерживает каналы:
+#   • in_app  — запись в db.notifications (видна в кабинете клиента)
+#   • email   — отправка через EmailChannel (Resend / SMTP fallback)
+#   • both    — оба канала параллельно
+#
+# Сохраняет лог отправок в db.admin_notifications_log (для будущего экрана
+# истории, если понадобится).
+
+@router.get("/api/admin/notifications/customers", dependencies=[Depends(require_admin)])
+async def list_customers_for_notifications(search: Optional[str] = None, limit: int = 200):
+    """Список клиентов для выбора в форме отправки уведомлений."""
+    db = _db()
+    q: Dict[str, Any] = {}
+    if search and search.strip():
+        rx = {"$regex": re.escape(search.strip()), "$options": "i"}
+        q = {"$or": [{"name": rx}, {"email": rx}, {"phone": rx}]}
+    cursor = db.customers.find(q, {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1}).limit(min(max(limit, 1), 500))
+    items = await cursor.to_list(length=limit)
+    return {"success": True, "items": items, "total": len(items)}
+
+
+@router.post("/api/admin/notifications/send-to-customer", dependencies=[Depends(require_admin)])
+async def admin_send_to_customer(data: Dict[str, Any] = Body(...)):
+    """Отправить уведомление одному клиенту.
+
+    Body:
+      customerId: str            — id клиента (или customer_id / userId)
+      channel:    'in_app' | 'email' | 'both'   (default 'in_app')
+      title:      str            — заголовок (обяз.)
+      message:    str            — тело сообщения (обяз.)
+      subject?:   str            — переопределить subject письма (по умолч. = title)
+    """
+    db = _db()
+    cid = (data.get("customerId") or data.get("customer_id") or data.get("userId") or "").strip()
+    channel = (data.get("channel") or "in_app").strip().lower()
+    title = (data.get("title") or "").strip()
+    message = (data.get("message") or data.get("body") or "").strip()
+    subject = (data.get("subject") or title).strip()
+
+    if not cid:
+        raise HTTPException(400, "customerId is required")
+    if channel not in ("in_app", "email", "both"):
+        raise HTTPException(400, "channel must be one of: in_app, email, both")
+    if not title or not message:
+        raise HTTPException(400, "title and message are required")
+
+    customer = await db.customers.find_one({"id": cid}) or await db.customers.find_one({"_id": cid})
+    if not customer:
+        raise HTTPException(404, f"Customer not found: {cid}")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    results: Dict[str, Any] = {"channels": {}}
+
+    # 1) In-app: пишем в коллекцию notifications, кабинет читает по customerId.
+    if channel in ("in_app", "both"):
+        notif = {
+            "id": f"notif-{uuid.uuid4().hex[:12]}",
+            "type": "info",
+            "title": title,
+            "message": message,
+            "customerId": cid,
+            "userId": cid,
+            "read": False,
+            "isRead": False,
+            "createdAt": now_iso,
+            "created_at": now_iso,
+            "source": "admin_manual",
+        }
+        try:
+            await db.notifications.insert_one(notif)
+            # Соп. через socket.io (если поднят) — best-effort.
+            try:
+                sio = getattr(service, "_sio", None) if "service" in globals() else None
+                if sio:
+                    await sio.emit("notification:new", {**notif}, room=f"customer:{cid}")
+            except Exception:
+                pass
+            results["channels"]["in_app"] = {"ok": True, "id": notif["id"]}
+        except Exception as e:
+            results["channels"]["in_app"] = {"ok": False, "error": str(e)}
+
+    # 2) Email: используем EmailChannel (Resend → SMTP fallback).
+    if channel in ("email", "both"):
+        to_email = (customer.get("email") or "").strip()
+        if not to_email or "@" not in to_email:
+            results["channels"]["email"] = {"ok": False, "error": "Customer has no valid email"}
+        else:
+            try:
+                html = (
+                    "<div style='font-family:system-ui,sans-serif;padding:24px;background:#fafafa;color:#18181B'>"
+                    f"<h2 style='margin:0 0 12px 0'>{title}</h2>"
+                    f"<div style='color:#3F3F46;line-height:1.55;font-size:14px;white-space:pre-wrap'>{message}</div>"
+                    "<hr style='margin:24px 0;border:0;border-top:1px solid #E4E4E7' />"
+                    "<p style='color:#A1A1AA;font-size:12px;margin:0'>DM Auto · BIBI Cars</p>"
+                    "</div>"
+                )
+                ch = EmailChannel(db)
+                res = await ch.send(
+                    to=to_email,
+                    subject=subject,
+                    html=html,
+                    text=message,
+                    event="admin_manual_to_customer",
+                    context={"customerId": cid, "title": title},
+                )
+                results["channels"]["email"] = {
+                    "ok": bool(res.get("ok")),
+                    "mode": res.get("mode"),
+                    "id": res.get("id"),
+                }
+            except Exception as e:
+                logger.exception("[admin_send_to_customer] email failed")
+                results["channels"]["email"] = {"ok": False, "error": str(e)}
+
+    # 3) Лог отправки — для возможной истории.
+    try:
+        await db.admin_notifications_log.insert_one({
+            "id": f"adm-notif-{uuid.uuid4().hex[:12]}",
+            "customerId": cid,
+            "channel": channel,
+            "title": title,
+            "message": message,
+            "subject": subject,
+            "results": results.get("channels", {}),
+            "createdAt": now_iso,
+        })
+    except Exception:
+        pass
+
+    return {"success": True, **results}
+
+
+@router.get("/api/admin/notifications/log", dependencies=[Depends(require_admin)])
+async def admin_notifications_log(limit: int = 50):
+    """Последние отправки админом — для блока «История» в UI."""
+    db = _db()
+    cursor = db.admin_notifications_log.find({}, {"_id": 0}).sort("createdAt", -1).limit(min(max(limit, 1), 200))
+    items = await cursor.to_list(length=limit)
+    return {"success": True, "items": items}
+
+
+# ─────────── Admin: email usage (Resend free-tier counters) - alt mount ────
+
 @router.get("/api/admin/notifications/email/usage", dependencies=[Depends(require_admin)])
 async def email_usage():
     from datetime import timedelta

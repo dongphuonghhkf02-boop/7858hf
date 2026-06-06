@@ -1,58 +1,36 @@
 /**
- * SystemPage — Unified hub for all system configuration.
+ * SystemPage — резко урезанный хаб настроек CRM по требованию:
+ *   • Двухфакторная аутентификация для входа в CRM
+ *   • Интеграции — только Google Sign-In (авторизация) и Resend (почтовые рассылки)
  *
- * Tabs (after cleanup): General · Auth & URLs · Email outbox · SMS outbox
- *
- * Removed:
- *   • AI tab (OpenAI integration removed from the product)
- *   • Workers Health tab (UI block dropped per product decision; background
- *     workers still run in the backend — only the UI surface is gone).
+ * Всё остальное (Stripe, SMS, Email outbox/SMTP, AI, Workers Health,
+ * Domain & CORS, CRM-pipelines и т.п.) из хаба убрано.
  */
 import React, { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import {
-  Wrench,
-  ShieldCheck,
-  EnvelopeSimple,
-  DeviceMobile,
-} from '@phosphor-icons/react';
+import { Wrench, ShieldCheck, Plugs } from '@phosphor-icons/react';
 
 import AdminSettingsPage from './AdminSettingsPage';
-import AuthSettingsPage from './AuthSettingsPage';
-import EmailOutboxPage from './EmailOutboxPage';
-import SmsOutboxPage from './SmsOutboxPage';
+import IntegrationsPage from './IntegrationsPage';
 
-import { useLang } from '../../i18n';
 import SectionTabs from '../../components/ui/SectionTabs';
 
-const TABS_DEF = [
-  { id: 'general', labelKey: 'adm_general',        tipKey: 'sys_tip_general', icon: Wrench },
-  { id: 'auth',    labelKey: 'adm_auth_urls',      tipKey: 'sys_tip_auth',    icon: ShieldCheck },
-  { id: 'email',   labelKey: 'adm_email_outbox',   tipKey: 'sys_tip_email',   icon: EnvelopeSimple },
-  { id: 'sms',     labelKey: 'adm_sms_outbox',     tipKey: 'sys_tip_sms',     icon: DeviceMobile },
+const TABS = [
+  { id: '2fa',          icon: ShieldCheck, label: 'Двухфакторная аутентификация',
+    tip: 'Настройка входа в CRM через Google Authenticator / TOTP.' },
+  { id: 'integrations', icon: Plugs, label: 'Интеграции',
+    tip: 'Google Sign-In и рассылка email через Resend.' },
 ];
 
 export default function SystemPage() {
-  const { t } = useLang();
   const location = useLocation();
   const navigate = useNavigate();
 
-  const TABS = useMemo(
-    () =>
-      TABS_DEF.map((tab) => ({
-        id: tab.id,
-        icon: tab.icon,
-        label: t(tab.labelKey),
-        tip: t(tab.tipKey),
-      })),
-    [t],
-  );
-
   const activeTab = useMemo(() => {
     const search = new URLSearchParams(location.search);
-    const tab = search.get('tab') || 'general';
-    return TABS.find((x) => x.id === tab) ? tab : 'general';
-  }, [location.search, TABS]);
+    const tab = search.get('tab') || '2fa';
+    return TABS.find((x) => x.id === tab) ? tab : '2fa';
+  }, [location.search]);
 
   const setTab = (id) => {
     const search = new URLSearchParams(location.search);
@@ -60,10 +38,11 @@ export default function SystemPage() {
     navigate({ pathname: '/admin/settings', search: search.toString() }, { replace: false });
   };
 
-  const active = TABS.find((x) => x.id === activeTab) || TABS[0];
-
   return (
-    <div className="min-h-full bg-[#FAFAFA]" style={{ fontFamily: 'Mazzard, Mazzard H, Mazzard M, system-ui, sans-serif' }}>
+    <div
+      className="min-h-full bg-[#FAFAFA]"
+      style={{ fontFamily: 'Mazzard, Mazzard H, Mazzard M, system-ui, sans-serif' }}
+    >
       <div className="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 bg-white border-b border-[#E4E4E7]">
         <div className="max-w-6xl mx-auto">
           <div className="flex items-center gap-3">
@@ -72,10 +51,10 @@ export default function SystemPage() {
             </div>
             <div className="min-w-0">
               <h1 className="text-2xl font-bold tracking-tight text-[#18181B] leading-tight">
-                {t('notifSystem') || 'Система'}
+                Система
               </h1>
               <p className="text-[12px] text-[#71717A] mt-0.5">
-                {t('adm3_7cc60ff3e9') || 'Пиплайны, авторизация, URL и почтовый транспорт.'}
+                Двухфакторная аутентификация и подключённые интеграции.
               </p>
             </div>
           </div>
@@ -86,18 +65,20 @@ export default function SystemPage() {
               activeId={activeTab}
               onChange={setTab}
               testIdPrefix="system-tab"
-              ariaLabel="System sections"
+              ariaLabel="Разделы системы"
             />
           </div>
         </div>
       </div>
 
       <div className="px-4 sm:px-6 py-5 sm:py-6">
-        <div className="max-w-6xl mx-auto" data-active-tab={active.id}>
-          {activeTab === 'general' && <AdminSettingsPage embedded />}
-          {activeTab === 'auth'    && <AuthSettingsPage    embedded />}
-          {activeTab === 'email'   && <EmailOutboxPage     embedded />}
-          {activeTab === 'sms'     && <SmsOutboxPage       embedded />}
+        <div className="max-w-6xl mx-auto">
+          {activeTab === '2fa' && (
+            <AdminSettingsPage embedded forceTab="security" hideTabs />
+          )}
+          {activeTab === 'integrations' && (
+            <IntegrationsPage embedded filterProviders={['google_oauth', 'resend']} />
+          )}
         </div>
       </div>
     </div>

@@ -1,711 +1,386 @@
 /**
- * Master-Admin → Notifications (unified hub)
+ * NotificationsHubPage — тотально упрощённый хаб по требованию:
+ *   «Отправить уведомление клиенту — и всё.»
  *
- * Объединяет два ранее раздельных блока:
- *   - /admin/settings/notifications-rules  (КОГДА слать: события × аудитории × каналы)
- *   - /admin/settings/email-templates      (ЧТО слать: subject/html/text для UA/EN/BG)
+ * Одна форма:
+ *   1) выбрать клиента
+ *   2) выбрать канал: в кабинет (in-app) / Email / Оба
+ *   3) ввести заголовок и текст
+ *   4) Отправить
  *
- * Логика и API остаются прежними — никакой деградации:
- *   GET   /api/admin/notification-rules                 — список правил
- *   PATCH /api/admin/notification-rules/{event}         — изменить правило
- *   GET   /api/admin/email-templates                    — список шаблонов
- *   POST  /api/admin/email-templates                    — создать шаблон
- *   PATCH /api/admin/email-templates/{id}               — изменить шаблон
- *   POST  /api/admin/notifications/test-dispatch        — тестовая отправка
+ * Под ниже — компактный лог последних отправок.
  *
- * Дизайн: единый стиль ‘insights-карточек’ — белый фон, hairline border,
- * чёрные пилюли каналов, светлые ряды аудиторий. Side-drawer редактор
- * шаблона открывается прямо из карточки события.
- *
- * Хинты-тултипы при наведении — БЕЗ иконок «?». Просто наводим мышь.
+ * Backend: POST /api/admin/notifications/send-to-customer
+ *          GET  /api/admin/notifications/customers
+ *          GET  /api/admin/notifications/log
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { useLang } from '../../i18n';
-import RefreshButton from '../../components/ui/RefreshButton';
-import WhiteSelect from '../../components/ui/WhiteSelect';
-import IntegrationsPage from './IntegrationsPage';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '../../components/ui/tooltip';
-import {
-  Bell,
-  Mail,
-  Smartphone,
-  ToggleLeft,
-  ToggleRight,
-  Play,
-  Users,
-  UserCircle,
-  Shield,
-  Crown,
-  Cable,
-  Send,
-  CheckCircle2,
-  PlayCircle,
-  FileCheck2,
-  AlertTriangle,
-  Save,
-  Eye,
-  Search,
-  X,
-  FileText,
-  Plus,
-} from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Bell, MagnifyingGlass, PaperPlaneTilt, EnvelopeSimple, ChatCenteredDots, CheckCircle, XCircle, Clock } from '@phosphor-icons/react';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
 
-// ─────────────────────── Static meta ─────────────────────────────────────
-const EVENT_META = {
-  invoice_sent:          { icon: Send,           fallback: 'Invoice sent to client' },
-  payment_confirmed:     { icon: CheckCircle2,   fallback: 'Payment confirmed' },
-  order_started:         { icon: PlayCircle,     fallback: 'Order launched' },
-  order_finished:        { icon: FileCheck2,     fallback: 'Order completed' },
-  payment_reminder:      { icon: AlertTriangle,  fallback: 'Payment reminder' },
-  provider_tier_changed: { icon: Shield,         fallback: 'Provider tier changed' },
-};
-
-const AUDIENCE = {
-  customer:     { labelKey: 'customer',         icon: UserCircle },
-  manager:      { labelKey: 'roleManager',      icon: Users },
-  team_lead:    { labelKey: 'roleTeamLead',     icon: Shield },
-  master_admin: { labelKey: 'roleMasterAdmin',  icon: Crown },
-};
-
-const CHANNELS = {
-  email:  { labelKey: 'emailLabel',   icon: Mail,       tipKey: 'hub_tip_channel_email' },
-  in_app: { labelKey: 'inAppChannel', icon: Bell,       tipKey: 'hub_tip_channel_inapp' },
-  sms:    { labelKey: 'smsChannel',   icon: Smartphone, tipKey: 'hub_tip_channel_sms' },
-};
-
-// Только email-канал использует HTML-шаблоны. SMS/in-app тоже могут иметь
-// текст, но сейчас в системе редактор привязан к email_templates → отображаем
-// «шаблоны» только когда канал email включён ИЛИ когда хоть один шаблон уже
-// есть в БД (для возможности правки наследия).
-const LANGS = [
-  { code: 'ru', flag: '🇷🇺', label: 'RU' },
-  { code: 'en', flag: '🇬🇧', label: 'EN' },
+const CHANNELS = [
+  { id: 'in_app', label: 'В кабинет клиента', icon: ChatCenteredDots, hint: 'Пуш-уведомление в персональном кабинете' },
+  { id: 'email',  label: 'Email (Resend)',     icon: EnvelopeSimple,    hint: 'Письмо на email клиента через Resend' },
+  { id: 'both',   label: 'Кабинет + Email',   icon: PaperPlaneTilt,     hint: 'Оба канала одновременно' },
 ];
 
-const authHeaders = () => {
-  const token = localStorage.getItem('token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
+export default function NotificationsHubPage() {
+  const [customers, setCustomers] = useState([]);
+  const [loadingCustomers, setLoadingCustomers] = useState(false);
+  const [search, setSearch] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [channel, setChannel] = useState('in_app');
+  const [title, setTitle] = useState('');
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
 
-const humanizeEvent = (key = '') =>
-  String(key)
-    .replace(/[_-]+/g, ' ')
-    .trim()
-    .replace(/^./, (c) => c.toUpperCase());
+  const [log, setLog] = useState([]);
+  const [loadingLog, setLoadingLog] = useState(false);
 
-// Reusable hover tooltip — NO icon. Just wrap children, hover triggers panel.
-const HoverTip = ({ text, side = 'top', children, asChild = true }) => {
-  if (!text) return children;
-  return (
-    <TooltipProvider delayDuration={120}>
-      <Tooltip>
-        <TooltipTrigger asChild={asChild}>{children}</TooltipTrigger>
-        <TooltipContent
-          side={side}
-          className="max-w-xs bg-[#18181B] text-white text-[12px] leading-relaxed px-3 py-2 rounded-lg shadow-lg"
-        >
-          {text}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-};
+  const fetchCustomers = async (q = '') => {
+    setLoadingCustomers(true);
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/notifications/customers`, {
+        params: q ? { search: q, limit: 200 } : { limit: 200 },
+      });
+      setCustomers(Array.isArray(res.data?.items) ? res.data.items : []);
+    } catch (e) {
+      console.error(e);
+      toast.error('Не удалось загрузить список клиентов');
+    } finally {
+      setLoadingCustomers(false);
+    }
+  };
 
-// ─────────────────────── Template editor (side drawer) ───────────────────
-const TemplateDrawer = ({ open, draft, onClose, onChange, onSave, onTest, t }) => {
-  const [preview, setPreview] = useState(false);
-  // Lock body scroll while open
+  const fetchLog = async () => {
+    setLoadingLog(true);
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/notifications/log`, { params: { limit: 30 } });
+      setLog(Array.isArray(res.data?.items) ? res.data.items : []);
+    } catch (e) {
+      // лог — неблокирующий
+    } finally {
+      setLoadingLog(false);
+    }
+  };
+
   useEffect(() => {
-    if (!open) return;
-    try { document.body.style.overflow = 'hidden'; } catch { /* ignore */ }
-    return () => { try { document.body.style.overflow = ''; } catch { /* ignore */ } };
-  }, [open]);
+    fetchCustomers();
+    fetchLog();
+  }, []);
 
-  if (!open || !draft) return null;
-  return createPortal(
-    <div className="fixed inset-0 flex" style={{ zIndex: 9999, isolation: 'isolate' }}>
-      <div className="flex-1 bg-zinc-900/40" onClick={onClose} />
-      <aside className="w-full max-w-3xl bg-white shadow-2xl overflow-y-auto">
-        {/* Sticky header */}
-        <div className="sticky top-0 z-10 bg-white border-b border-zinc-200 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="min-w-0 flex items-start gap-3">
-            <HoverTip text={t('hub_tip_close_editor')} side="bottom">
-              <button
-                onClick={onClose}
-                className="shrink-0 inline-flex items-center justify-center h-9 w-9 rounded-xl bg-white border border-[#E4E4E7] hover:bg-zinc-50 text-[#18181B] transition-colors focus:outline-none focus-visible:ring-4 focus-visible:ring-black/10"
-                aria-label="Close"
-                data-testid="template-drawer-close-btn"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </HoverTip>
-            <div className="min-w-0">
-              <h2 className="font-semibold text-zinc-900 whitespace-nowrap">
-                {draft._new ? t('adm2_82976e2a87') : t('adm2_2474e2a1f6')}
-              </h2>
-              <p className="text-xs text-zinc-500 truncate">
-                {EVENT_META[draft.event]?.fallback || draft.event}
-                {' · '}
-                {t(AUDIENCE[draft.audience]?.labelKey || 'unknownLabel')}
-                {' · '}
-                {LANGS.find((l) => l.code === draft.lang)?.flag} {draft.lang?.toUpperCase()}
-              </p>
+  // Легкий поиск по уже загруженным клиентам (плюс серверный search по Enter).
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter((c) =>
+      [c.name, c.email, c.phone, c.id].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)),
+    );
+  }, [customers, search]);
+
+  const selected = customers.find((c) => c.id === selectedCustomerId) || null;
+
+  const canSend = selectedCustomerId && title.trim() && message.trim() && !sending;
+
+  const send = async () => {
+    if (!canSend) return;
+    setSending(true);
+    try {
+      const res = await axios.post(`${API_URL}/api/admin/notifications/send-to-customer`, {
+        customerId: selectedCustomerId,
+        channel,
+        title: title.trim(),
+        message: message.trim(),
+      });
+      const channels = res.data?.channels || {};
+      const allOk = Object.values(channels).every((c) => c?.ok);
+      if (allOk) {
+        toast.success('Уведомление отправлено');
+      } else {
+        const errors = Object.entries(channels)
+          .filter(([, v]) => !v?.ok)
+          .map(([k, v]) => `${k}: ${v?.error || 'failed'}`)
+          .join(' · ');
+        toast.warning(`Отправлено частично. ${errors}`);
+      }
+      setTitle('');
+      setMessage('');
+      fetchLog();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Не удалось отправить уведомление');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      data-testid="notifications-hub"
+      style={{ fontFamily: 'Mazzard, Mazzard H, Mazzard M, system-ui, sans-serif' }}
+    >
+      {/* Header */}
+      <div className="flex items-start gap-3 mb-6">
+        <div className="w-10 h-10 rounded-2xl bg-[#18181B] text-white flex items-center justify-center shrink-0">
+          <Bell size={20} weight="bold" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight text-[#18181B] leading-tight">Уведомления</h1>
+          <p className="text-[12px] text-[#71717A] mt-0.5">
+            Отправьте уведомление клиенту — в кабинет или на email через Resend.
+          </p>
+        </div>
+      </div>
+
+      {/* Grid: форма + список клиентов */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
+        {/* === LEFT: форма === */}
+        <div className="bg-white border border-[#E4E4E7] rounded-2xl p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-[#18181B]">Отправка уведомления</h2>
+          <p className="text-[12px] text-[#71717A] mt-1 mb-5">
+            Выберите клиента, канал и введите текст сообщения.
+          </p>
+
+          {/* Селект клиента — видимость состояния */}
+          <div className="mb-4">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[#71717A] mb-1.5">
+              Клиент
+            </label>
+            <div
+              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl border ${
+                selected ? 'border-[#18181B] bg-[#F7F7F8]' : 'border-[#E4E4E7] bg-white'
+              }`}
+            >
+              {selected ? (
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-[#18181B] truncate">
+                    {selected.name || selected.email || selected.id}
+                  </div>
+                  <div className="text-[11px] text-[#71717A] truncate">
+                    {[selected.email, selected.phone].filter(Boolean).join(' · ') || '—'}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-[#A1A1AA]">Выберите клиента справа из списка</div>
+              )}
+              {selected && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCustomerId('')}
+                  className="text-[12px] text-[#71717A] hover:text-[#18181B] px-2 py-1 rounded-md hover:bg-white shrink-0"
+                >
+                  Сбросить
+                </button>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap shrink-0 justify-end">
-            <HoverTip text={t('hub_tip_preview')} side="bottom">
-              <button
-                onClick={() => setPreview((p) => !p)}
-                className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 rounded-lg text-sm text-zinc-700 flex items-center gap-1 whitespace-nowrap"
-                data-testid="template-drawer-preview-btn"
-              >
-                <Eye className="w-4 h-4" /> {preview ? 'HTML' : 'Preview'}
-              </button>
-            </HoverTip>
-            <HoverTip text={t('hub_tip_test_dispatch')} side="bottom">
-              <button
-                onClick={onTest}
-                className="px-3 py-1.5 bg-white border border-[#E4E4E7] hover:bg-zinc-50 text-[#18181B] rounded-lg text-sm flex items-center gap-1 whitespace-nowrap"
-                data-testid="template-drawer-test-btn"
-              >
-                <Send className="w-4 h-4" /> {t('adm_test')}
-              </button>
-            </HoverTip>
-            <HoverTip text={t('hub_tip_save_template')} side="bottom">
-              <button
-                onClick={onSave}
-                className="px-3 py-1.5 bg-[#18181B] hover:bg-[#27272A] text-white rounded-lg text-sm font-medium flex items-center gap-1 whitespace-nowrap"
-                data-testid="template-drawer-save-btn"
-              >
-                <Save className="w-4 h-4" /> {t('saveAction')}
-              </button>
-            </HoverTip>
-          </div>
-        </div>
 
-        <div className="p-4 sm:p-6 space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">
-              {t('adm2_subject_e2f5e8da81')}
+          {/* Канал */}
+          <div className="mb-4">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[#71717A] mb-1.5">
+              Канал доставки
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {CHANNELS.map((c) => {
+                const Icon = c.icon;
+                const active = channel === c.id;
+                return (
+                  <button
+                    type="button"
+                    key={c.id}
+                    onClick={() => setChannel(c.id)}
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border text-left transition-colors ${
+                      active
+                        ? 'border-[#18181B] bg-[#18181B] text-white'
+                        : 'border-[#E4E4E7] bg-white text-[#18181B] hover:border-[#A1A1AA]'
+                    }`}
+                    data-testid={`channel-${c.id}`}
+                  >
+                    <Icon size={18} weight="duotone" className={active ? 'text-white' : 'text-[#52525B]'} />
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">{c.label}</div>
+                      <div className={`text-[11px] mt-0.5 ${active ? 'text-[#A1A1AA]' : 'text-[#71717A]'}`}>
+                        {c.hint}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Заголовок */}
+          <div className="mb-4">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[#71717A] mb-1.5">
+              Заголовок
             </label>
             <input
-              value={draft.subject || ''}
-              onChange={(e) => onChange({ ...draft, subject: e.target.value })}
-              placeholder="New invoice #{{ invoice.id }}"
-              className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#18181B]/15 focus:border-[#18181B]"
-              data-testid="template-drawer-subject-input"
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              maxLength={120}
+              placeholder="Короткий заголовок сообщения"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-[#E4E4E7] bg-white text-sm text-[#18181B] focus:outline-none focus:border-[#18181B] focus:ring-2 focus:ring-[#18181B]/10"
+              data-testid="notif-title"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">
-              {t('htmlBody')}
-            </label>
-            {preview ? (
-              <div
-                className="border border-zinc-200 rounded-lg p-4 max-h-96 overflow-y-auto bg-white"
-                dangerouslySetInnerHTML={{ __html: draft.html || '' }}
-              />
-            ) : (
-              <textarea
-                rows={12}
-                value={draft.html || ''}
-                onChange={(e) => onChange({ ...draft, html: e.target.value })}
-                placeholder="<p>Hello {{ customer.name }},</p>"
-                className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#18181B]/15"
-                data-testid="template-drawer-html-textarea"
-              />
-            )}
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-600 mb-1">
-              {t('adm2_372a742777')}
+          {/* Сообщение */}
+          <div className="mb-5">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[#71717A] mb-1.5">
+              Текст сообщения
             </label>
             <textarea
-              rows={3}
-              value={draft.text_template || ''}
-              onChange={(e) => onChange({ ...draft, text_template: e.target.value })}
-              placeholder="Plain-text fallback for clients without HTML support"
-              className="w-full px-3 py-2 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#18181B]/15"
-              data-testid="template-drawer-text-textarea"
+              rows={6}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              maxLength={4000}
+              placeholder="Напишите текст уведомления…"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-[#E4E4E7] bg-white text-sm text-[#18181B] focus:outline-none focus:border-[#18181B] focus:ring-2 focus:ring-[#18181B]/10 resize-y"
+              data-testid="notif-message"
             />
+            <div className="text-[11px] text-[#A1A1AA] mt-1 text-right">{message.length} / 4000</div>
           </div>
 
-          <div className="bg-zinc-50 border border-zinc-100 rounded-lg p-3 text-xs text-zinc-500">
-            <p className="font-medium text-zinc-700 mb-1">{t('adm_available_tokens')}</p>
-            <code className="text-[11px] leading-relaxed block">
-              {'{{ customer.name }}  {{ customer.email }}  {{ invoice.id }}  {{ invoice.total_fmt }}  {{ invoice.currency }}'}
-              <br />
-              {'{{ order.id }}  {{ order.steps_total }}  {{ manager.name }}  {{ manager.email }}'}
-            </code>
-          </div>
-        </div>
-      </aside>
-    </div>,
-    document.body,
-  );
-};
-
-// ─────────────────────── Main hub page ───────────────────────────────────
-export default function NotificationsHubPage() {
-  const { t } = useLang();
-
-  const [rules, setRules] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [testing, setTesting] = useState('');
-
-  // Filters
-  const [filterEvent, setFilterEvent] = useState('');
-  const [filterAud, setFilterAud] = useState('');
-  const [filterChannel, setFilterChannel] = useState('');
-  const [search, setSearch] = useState('');
-
-  // Editor drawer
-  const [draft, setDraft] = useState(null);
-
-  // ─── Loaders ───────────────────────────────────────────────────────────
-  const loadAll = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [r, tpl] = await Promise.all([
-        axios.get(`${API_URL}/api/admin/notification-rules`, { headers: authHeaders() }),
-        axios.get(`${API_URL}/api/admin/email-templates`, { headers: authHeaders() }),
-      ]);
-      setRules(r.data?.items || []);
-      setTemplates(tpl.data?.items || []);
-    } catch {
-      toast.error(t('loadingError'));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => { loadAll(); }, [loadAll]);
-
-  // ─── Rule actions ──────────────────────────────────────────────────────
-  const saveRule = async (event, patch) => {
-    try {
-      const r = await axios.patch(
-        `${API_URL}/api/admin/notification-rules/${event}`,
-        patch,
-        { headers: authHeaders() },
-      );
-      setRules((prev) => prev.map((x) => (x.event === event ? r.data.rule : x)));
-      toast.success(t('saved'));
-    } catch (e) {
-      toast.error(e.response?.data?.detail || t('adm2_fd77287f02'));
-    }
-  };
-
-  const toggleEnabled = (rule) =>
-    saveRule(rule.event, { enabled: !rule.enabled, targets: rule.targets || [] });
-
-  const toggleChannel = (rule, audience, channel) => {
-    const targets = (rule.targets || []).map((t0) => ({ ...t0, channels: [...(t0.channels || [])] }));
-    let target = targets.find((x) => x.audience === audience);
-    if (!target) {
-      targets.push({ audience, channels: [channel] });
-    } else {
-      const has = target.channels.includes(channel);
-      target.channels = has
-        ? target.channels.filter((c) => c !== channel)
-        : [...target.channels, channel];
-      if (target.channels.length === 0) {
-        targets.splice(targets.indexOf(target), 1);
-      }
-    }
-    return saveRule(rule.event, { enabled: rule.enabled, targets });
-  };
-
-  const testDispatch = async (event) => {
-    setTesting(event);
-    try {
-      const r = await axios.post(
-        `${API_URL}/api/admin/notifications/test-dispatch`,
-        { event },
-        { headers: authHeaders() },
-      );
-      toast.success(`${t('r9_sent')} · ${t('r9_recipients_label')}: ${r.data?.dispatch?.total || 0}`);
-    } catch (e) {
-      toast.error(e.response?.data?.detail || t('adm2_fd77287f02'));
-    } finally {
-      setTesting('');
-    }
-  };
-
-  // ─── Template actions ──────────────────────────────────────────────────
-  const findTemplate = useCallback(
-    (event, audience, lang) =>
-      templates.find(
-        (tpl) => tpl.event === event && tpl.audience === audience && tpl.lang === lang,
-      ),
-    [templates],
-  );
-
-  const openTemplate = (event, audience, lang) => {
-    const existing = findTemplate(event, audience, lang);
-    if (existing) {
-      setDraft({ ...existing });
-    } else {
-      setDraft({
-        _new: true,
-        id: null,
-        event,
-        audience,
-        lang,
-        subject: '',
-        html: '<p></p>',
-        text_template: '',
-      });
-    }
-  };
-
-  const saveTemplate = async () => {
-    if (!draft) return;
-    try {
-      const existing = !draft._new && templates.some((i) => i.id === draft.id);
-      if (existing) {
-        const r = await axios.patch(
-          `${API_URL}/api/admin/email-templates/${draft.id}`,
-          {
-            subject: draft.subject,
-            html: draft.html,
-            text_template: draft.text_template || '',
-          },
-          { headers: authHeaders() },
-        );
-        const updated = r.data?.template || draft;
-        setTemplates((prev) => prev.map((x) => (x.id === draft.id ? updated : x)));
-      } else {
-        const r = await axios.post(
-          `${API_URL}/api/admin/email-templates`,
-          draft,
-          { headers: authHeaders() },
-        );
-        const created = r.data?.template;
-        if (created) {
-          setTemplates((prev) => {
-            const without = prev.filter((x) => x.id !== created.id);
-            return [...without, created];
-          });
-        }
-      }
-      toast.success(t('adm_template_saved'));
-      setDraft(null);
-    } catch (e) {
-      toast.error(e.response?.data?.detail || t('adm2_d1b0c19159'));
-    }
-  };
-
-  const testFromDrawer = async () => {
-    if (!draft?.event) return;
-    try {
-      const r = await axios.post(
-        `${API_URL}/api/admin/notifications/test-dispatch`,
-        { event: draft.event },
-        { headers: authHeaders() },
-      );
-      toast.success(`Dispatch OK · ${r.data?.dispatch?.total || 0} ${t('recipients')}`);
-    } catch (e) {
-      toast.error(e.response?.data?.detail || t('adm2_425cb83731'));
-    }
-  };
-
-  // ─── Filters ───────────────────────────────────────────────────────────
-  const filteredRules = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return rules.filter((rule) => {
-      if (filterEvent && rule.event !== filterEvent) return false;
-      if (filterAud) {
-        const has = (rule.targets || []).some((tg) => tg.audience === filterAud);
-        if (!has) return false;
-      }
-      if (filterChannel) {
-        const has = (rule.targets || []).some((tg) =>
-          (tg.channels || []).includes(filterChannel),
-        );
-        if (!has) return false;
-      }
-      if (q) {
-        const eventLabel = (EVENT_META[rule.event]?.fallback || humanizeEvent(rule.event)).toLowerCase();
-        if (!eventLabel.includes(q) && !rule.event.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [rules, filterEvent, filterAud, filterChannel, search]);
-
-  const hasChannel = (rule, audience, channel) => {
-    const t0 = (rule.targets || []).find((x) => x.audience === audience);
-    return !!t0 && t0.channels.includes(channel);
-  };
-
-  // ─── Render ────────────────────────────────────────────────────────────
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#18181B] text-white flex items-center justify-center shrink-0">
-            <Bell className="w-[18px] h-[18px]" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <HoverTip text={t('hub_tip_page_intro')} side="bottom">
-              <h1
-                className="text-xl sm:text-2xl font-bold tracking-tight text-[#18181B] leading-tight break-words cursor-default"
-                style={{ fontFamily: 'Mazzard, Mazzard H, Mazzard M, system-ui, sans-serif' }}
-              >
-                {t('hub_title')}
-              </h1>
-            </HoverTip>
-            <p className="text-xs sm:text-sm text-[#71717A] mt-1 break-words">
-              {t('hub_subtitle')}
-            </p>
-          </div>
-          <div className="shrink-0">
-            <RefreshButton
-              onClick={loadAll}
-              loading={loading}
-              ariaLabel={t('adm_refresh_3')}
-              testId="notifications-hub-refresh-button"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Filter bar */}
-      <div className="mb-4 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))] sm:[grid-template-columns:minmax(280px,2fr)_repeat(3,minmax(180px,1fr))]">
-        <div className="relative min-w-0">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('hub_search_placeholder')}
-            className="w-full pl-10 pr-3 py-2.5 min-h-[2.75rem] border border-[#E4E4E7] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#18181B]/15 focus:border-[#18181B]"
-            data-testid="notifications-hub-search-input"
-          />
-        </div>
-        <WhiteSelect value={filterEvent} onChange={(e) => setFilterEvent(e.target.value)} data-testid="notifications-hub-event-select">
-          <option value="">{t('allEvents')}</option>
-          {Object.entries(EVENT_META).map(([k, v]) => (
-            <option key={k} value={k}>{v.fallback}</option>
-          ))}
-        </WhiteSelect>
-        <WhiteSelect value={filterAud} onChange={(e) => setFilterAud(e.target.value)} data-testid="notifications-hub-audience-select">
-          <option value="">{t('allAudiences')}</option>
-          {Object.entries(AUDIENCE).map(([k, v]) => (
-            <option key={k} value={k}>{t(v.labelKey)}</option>
-          ))}
-        </WhiteSelect>
-        <WhiteSelect value={filterChannel} onChange={(e) => setFilterChannel(e.target.value)} data-testid="notifications-hub-channel-select">
-          <option value="">{t('hub_all_channels')}</option>
-          {Object.entries(CHANNELS).map(([k, v]) => (
-            <option key={k} value={k}>{t(v.labelKey)}</option>
-          ))}
-        </WhiteSelect>
-      </div>
-
-      {/* Event cards */}
-      <div className="space-y-4">
-        {filteredRules.map((rule) => {
-          const meta = EVENT_META[rule.event] || { icon: Bell, fallback: humanizeEvent(rule.event) };
-          const EvIcon = meta.icon;
-          return (
-            <div
-              key={rule.event}
-              className={`bg-white border rounded-2xl overflow-hidden transition-opacity ${
-                rule.enabled ? 'border-[#E4E4E7]' : 'border-[#E4E4E7] opacity-60'
-              }`}
-              data-testid={`hub-event-card-${rule.event}`}
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => { setTitle(''); setMessage(''); }}
+              className="px-4 py-2.5 rounded-xl border border-[#E4E4E7] text-sm font-medium text-[#52525B] hover:bg-[#F4F4F5]"
             >
-              {/* Card header */}
-              <div className="px-5 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-[#E4E4E7] bg-zinc-50/40">
-                <div className="min-w-0 flex items-center gap-3 flex-1">
-                  <div className="w-10 h-10 rounded-xl bg-[#18181B]/5 text-[#18181B] flex items-center justify-center shrink-0">
-                    <EvIcon className="w-[18px] h-[18px]" />
-                  </div>
-                  <div className="min-w-0">
-                    <HoverTip text={t('hub_tip_event_name')} side="top">
-                      <p className="text-base sm:text-lg font-semibold text-[#18181B] leading-tight break-words cursor-default">
-                        {meta.fallback || humanizeEvent(rule.event)}
-                      </p>
-                    </HoverTip>
-                    <p className="text-[11px] text-zinc-400 font-mono mt-0.5">{rule.event}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <HoverTip text={t('hub_tip_test_event')} side="top">
-                    <button
-                      onClick={() => testDispatch(rule.event)}
-                      disabled={testing === rule.event || !rule.enabled}
-                      className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-white border border-[#E4E4E7] hover:bg-[#FAFAFA] text-[#18181B] text-xs font-medium disabled:opacity-50 transition-colors"
-                      data-testid={`hub-test-button-${rule.event}`}
-                    >
-                      <Play className="w-3.5 h-3.5" />
-                      {t('adm_test')}
-                    </button>
-                  </HoverTip>
-                  <HoverTip text={rule.enabled ? t('hub_tip_disable_event') : t('hub_tip_enable_event')} side="top">
-                    <button
-                      onClick={() => toggleEnabled(rule)}
-                      className={`inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium transition-colors ${
-                        rule.enabled
-                          ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                          : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                      }`}
-                      data-testid={`hub-enabled-toggle-${rule.event}`}
-                    >
-                      {rule.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
-                      {rule.enabled ? t('adm2_26841eb416') : t('adm2_7e9d3ee2f5')}
-                    </button>
-                  </HoverTip>
-                </div>
-              </div>
-
-              {/* Audience rows */}
-              <ul className="divide-y divide-[#F4F4F5]" data-testid={`hub-audience-list-${rule.event}`}>
-                {Object.entries(AUDIENCE)
-                  .filter(([audKey]) => !filterAud || audKey === filterAud)
-                  .map(([audKey, aud]) => {
-                  const Icon = aud.icon;
-                  const emailActive = hasChannel(rule, audKey, 'email');
-                  return (
-                    <li
-                      key={audKey}
-                      className="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 sm:px-6 py-4"
-                      data-testid={`hub-audience-row-${rule.event}-${audKey}`}
-                    >
-                      {/* Identity */}
-                      <div className="flex items-center gap-3 min-w-[180px] flex-1">
-                        <div className="w-11 h-11 rounded-xl bg-[#18181B]/5 flex items-center justify-center shrink-0">
-                          <Icon className="w-5 h-5 text-[#18181B]" />
-                        </div>
-                        <p className="text-sm sm:text-base font-medium text-[#18181B] truncate">
-                          {t(aud.labelKey)}
-                        </p>
-                      </div>
-
-                      {/* Channels */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {Object.entries(CHANNELS).map(([chKey, ch]) => {
-                          const ChIcon = ch.icon;
-                          const active = hasChannel(rule, audKey, chKey);
-                          return (
-                            <HoverTip key={chKey} text={t(ch.tipKey)} side="top">
-                              <button
-                                onClick={() => toggleChannel(rule, audKey, chKey)}
-                                disabled={!rule.enabled}
-                                aria-pressed={active}
-                                className={`inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                                  active
-                                    ? 'bg-[#18181B] text-white border border-[#18181B] shadow-sm hover:bg-[#27272A]'
-                                    : 'bg-white border border-[#E4E4E7] text-zinc-600 hover:bg-zinc-50'
-                                }`}
-                                data-testid={`hub-channel-button-${rule.event}-${audKey}-${chKey}`}
-                              >
-                                <ChIcon className="w-3.5 h-3.5" />
-                                {t(ch.labelKey)}
-                              </button>
-                            </HoverTip>
-                          );
-                        })}
-                      </div>
-
-                      {/* Email templates per language */}
-                      <div className="flex items-center gap-1.5 flex-wrap ml-auto">
-                        <span className="text-[11px] uppercase tracking-wider text-zinc-400 mr-1 font-medium">
-                          {t('hub_templates_label')}
-                        </span>
-                        {LANGS.map((L) => {
-                          const exists = !!findTemplate(rule.event, audKey, L.code);
-                          return (
-                            <HoverTip
-                              key={L.code}
-                              text={
-                                exists
-                                  ? `${t('hub_tip_edit_template')} · ${L.label}`
-                                  : `${t('hub_tip_create_template')} · ${L.label}`
-                              }
-                              side="top"
-                            >
-                              <button
-                                onClick={() => openTemplate(rule.event, audKey, L.code)}
-                                disabled={!emailActive && !exists}
-                                className={`inline-flex items-center gap-1 h-8 px-2.5 rounded-md text-[11px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-                                  exists
-                                    ? 'bg-white border border-[#18181B]/15 text-[#18181B] hover:bg-zinc-50'
-                                    : 'bg-white border border-dashed border-[#E4E4E7] text-zinc-400 hover:border-[#18181B]/40 hover:text-[#18181B]'
-                                }`}
-                                data-testid={`hub-template-pill-${rule.event}-${audKey}-${L.code}`}
-                              >
-                                <span aria-hidden>{L.flag}</span>
-                                <span>{L.label}</span>
-                                {exists ? (
-                                  <FileText className="w-3 h-3" />
-                                ) : (
-                                  <Plus className="w-3 h-3" />
-                                )}
-                              </button>
-                            </HoverTip>
-                          );
-                        })}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          );
-        })}
-
-        {filteredRules.length === 0 && !loading && (
-          <div className="text-center py-12 text-zinc-400 text-sm bg-white border border-dashed border-[#E4E4E7] rounded-2xl">
-            {t('adm_no_rules_found')}
+              Очистить
+            </button>
+            <button
+              type="button"
+              onClick={send}
+              disabled={!canSend}
+              className={`inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                canSend
+                  ? 'bg-[#18181B] text-white hover:bg-black'
+                  : 'bg-[#E4E4E7] text-[#A1A1AA] cursor-not-allowed'
+              }`}
+              data-testid="notif-send"
+            >
+              <PaperPlaneTilt size={16} weight="bold" />
+              {sending ? 'Отправка…' : 'Отправить'}
+            </button>
           </div>
+        </div>
+
+        {/* === RIGHT: список клиентов === */}
+        <aside className="bg-white border border-[#E4E4E7] rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-[#18181B]">Клиенты</h3>
+            <span className="text-[11px] text-[#A1A1AA]">{filtered.length}</span>
+          </div>
+          <div className="relative mb-3">
+            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#A1A1AA]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') fetchCustomers(search.trim()); }}
+              placeholder="Поиск по имени / email / телефону"
+              className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E4E4E7] bg-white text-[13px] text-[#18181B] focus:outline-none focus:border-[#18181B]"
+              data-testid="customer-search"
+            />
+          </div>
+          <div className="max-h-[520px] overflow-y-auto -mx-2 px-2 space-y-1">
+            {loadingCustomers && (
+              <div className="text-[12px] text-[#A1A1AA] py-6 text-center">Загрузка…</div>
+            )}
+            {!loadingCustomers && filtered.length === 0 && (
+              <div className="text-[12px] text-[#A1A1AA] py-6 text-center">Клиенты не найдены</div>
+            )}
+            {filtered.map((c) => {
+              const active = c.id === selectedCustomerId;
+              return (
+                <button
+                  type="button"
+                  key={c.id}
+                  onClick={() => setSelectedCustomerId(c.id)}
+                  className={`w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${
+                    active
+                      ? 'border-[#18181B] bg-[#F7F7F8]'
+                      : 'border-transparent hover:bg-[#F4F4F5]'
+                  }`}
+                  data-testid={`customer-row-${c.id}`}
+                >
+                  <div className="text-[13px] font-semibold text-[#18181B] truncate">
+                    {c.name || c.email || c.id}
+                  </div>
+                  <div className="text-[11.5px] text-[#71717A] truncate">
+                    {[c.email, c.phone].filter(Boolean).join(' · ') || '—'}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
+
+      {/* === LOG === */}
+      <div className="mt-6 bg-white border border-[#E4E4E7] rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-base font-semibold text-[#18181B]">Последние отправки</h3>
+            <p className="text-[12px] text-[#71717A] mt-0.5">Лог ручных уведомлений клиентам</p>
+          </div>
+          <button
+            type="button"
+            onClick={fetchLog}
+            className="px-3 py-1.5 rounded-lg border border-[#E4E4E7] text-[12px] font-medium text-[#52525B] hover:bg-[#F4F4F5]"
+          >
+            Обновить
+          </button>
+        </div>
+        {loadingLog && (
+          <div className="text-[12px] text-[#A1A1AA] py-6 text-center">Загрузка…</div>
+        )}
+        {!loadingLog && log.length === 0 && (
+          <div className="text-[12px] text-[#A1A1AA] py-6 text-center">Пока нет отправок</div>
+        )}
+        {!loadingLog && log.length > 0 && (
+          <ul className="divide-y divide-[#F4F4F5]">
+            {log.map((row) => {
+              const channels = row.results || {};
+              const allOk = Object.values(channels).every((c) => c?.ok);
+              const StatusIcon = allOk ? CheckCircle : Object.keys(channels).length === 0 ? Clock : XCircle;
+              const statusColor = allOk ? '#059669' : Object.keys(channels).length === 0 ? '#D97706' : '#DC2626';
+              return (
+                <li key={row.id} className="py-3 flex items-start gap-3">
+                  <StatusIcon size={18} weight="duotone" style={{ color: statusColor }} className="mt-0.5 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-[13px] font-semibold text-[#18181B] truncate">{row.title}</span>
+                      <span className="text-[11px] text-[#A1A1AA]">
+                        {new Date(row.createdAt).toLocaleString('ru-RU')}
+                      </span>
+                    </div>
+                    <div className="text-[12px] text-[#52525B] mt-0.5 line-clamp-2 whitespace-pre-wrap">
+                      {row.message}
+                    </div>
+                    <div className="text-[11px] text-[#71717A] mt-1">
+                      Клиент: <span className="font-mono">{row.customerId}</span> · Канал: {row.channel}
+                      {Object.entries(channels).map(([k, v]) => (
+                        <span key={k} className={`ml-2 ${v?.ok ? 'text-[#059669]' : 'text-[#DC2626]'}`}>
+                          · {k}: {v?.ok ? 'ok' : (v?.error || 'failed')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
-
-      {/* Channel Integrations footer (kept from old NotificationRulesPage) */}
-      <div className="mt-10">
-        <div className="flex items-start gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-[#18181B] text-white flex items-center justify-center shrink-0">
-            <Cable className="w-[18px] h-[18px]" />
-          </div>
-          <div className="min-w-0">
-            <HoverTip text={t('hub_tip_integrations')} side="top">
-              <h2 className="text-lg sm:text-xl font-bold text-gray-900 leading-tight cursor-default">
-                {t('hub_integrations_title')}
-              </h2>
-            </HoverTip>
-            <p className="text-xs sm:text-sm text-gray-500 mt-1">
-              {t('hub_integrations_subtitle')}
-            </p>
-          </div>
-        </div>
-        <IntegrationsPage embedded filterProviders={['resend', 'email', 'sms']} />
-      </div>
-
-      {/* Side drawer */}
-      <TemplateDrawer
-        open={!!draft}
-        draft={draft}
-        onClose={() => setDraft(null)}
-        onChange={setDraft}
-        onSave={saveTemplate}
-        onTest={testFromDrawer}
-        t={t}
-      />
-    </div>
+    </motion.div>
   );
 }
